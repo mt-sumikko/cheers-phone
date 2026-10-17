@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>スマホ乾杯</title>
+<style>
+:root{--bg:#fbf7ee;--ink:#2b2a33;--rim:rgba(43,42,51,.38)}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none}
+body{background:var(--bg);color:var(--ink);font-family:"Hiragino Sans","Noto Sans JP",system-ui,sans-serif}
+canvas{position:absolute;inset:0;width:100%;height:100%}
+.rim{position:absolute;inset:6px;border-radius:30px 30px 52px 52px;border:3px solid var(--rim);pointer-events:none}
+.hud{position:absolute;left:0;right:0;top:0;padding:max(16px,env(safe-area-inset-top,0px)) 20px 0;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.hud>*{pointer-events:auto}
+.title{font-size:13px;font-weight:700;letter-spacing:.08em;opacity:.7}
+.row{display:flex;gap:6px;flex-wrap:wrap}
+.chip{font:inherit;font-size:13px;color:var(--ink);background:rgba(255,255,255,.75);border:1.5px solid var(--ink);border-radius:999px;padding:6px 12px;cursor:pointer}
+.chip.on{background:var(--ink);color:#fff}
+.say{font-size:12px;opacity:.75;min-height:18px;line-height:1.5}
+.btns{position:absolute;left:0;right:0;bottom:0;padding:0 20px max(22px,env(safe-area-inset-bottom,0px));display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
+.btn{font:inherit;font-size:15px;font-weight:700;color:#fff;background:var(--ink);border:0;border-radius:999px;padding:12px 22px;cursor:pointer}
+.btn.sub{color:var(--ink);background:rgba(255,255,255,.8);border:1.5px solid var(--ink);font-weight:600;font-size:13px;padding:10px 16px}
+.cheers{position:absolute;left:50%;top:36%;transform:translate(-50%,-50%) scale(.6);font-size:46px;font-weight:800;opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;white-space:nowrap}
+.cheers.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
+@media (prefers-reduced-motion:reduce){.cheers{transition:none}}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div class="rim"></div>
+<div class="hud">
+  <div class="title">スマホ乾杯（試作）</div>
+  <div class="row" id="drinks"></div>
+  <div class="say" id="say">画面をドラッグして傾けてみて。「コツン」で乾杯</div>
+</div>
+<div class="cheers" id="cheers">🍻 乾杯！</div>
+<div class="btns">
+  <button class="btn sub" id="sens" type="button">センサーを使う</button>
+  <button class="btn" id="bump" type="button">コツン</button>
+</div>
+<script>
+(()=>{
+const $=id=>document.getElementById(id);
+const cv=$('cv'),ctx=cv.getContext('2d'),sayEl=$('say'),cheersEl=$('cheers');
+const DRINKS=[
+  {n:'ビール',c:'#e9a21b',d:'#b9770c',foam:14,bub:true},
+  {n:'ハイボール',c:'#f2d37c',d:'#d4aa45',foam:4,bub:true},
+  {n:'赤ワイン',c:'#8a1f3d',d:'#5a1228',foam:0,bub:false},
+  {n:'ジンジャーエール',c:'#e6b45c',d:'#c58c2c',foam:3,bub:true},
+  {n:'ウーロン茶',c:'#9a6a35',d:'#6f4619',foam:0,bub:false}
+];
+let drink=DRINKS[0],W=0,H=0,dpr=1,N=90;
+let h=new Float32Array(N),v=new Float32Array(N);
+let phi=0,vphi=0,tilt=0,sensors=false,dragX=null,lastBump=0,bubbles=[],drops=[],rings=[],ct=null;
+const K=0.025,D=0.026,S=0.24;
+
+function resize(){dpr=window.devicePixelRatio||1;W=innerWidth;H=innerHeight;cv.width=W*dpr;cv.height=H*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);initBubbles();}
+function say(s){sayEl.textContent=s;}
+function initBubbles(){bubbles=[];for(let i=0;i<46;i++)bubbles.push({x:Math.random()*W,y:H*(0.5+Math.random()*0.5),r:1.5+Math.random()*3,s:20+Math.random()*50,p:Math.random()*6});}
+
+// drinks
+const dr=$('drinks');
+DRINKS.forEach((d,i)=>{const b=document.createElement('button');b.type='button';b.className='chip'+(i===0?' on':'');b.textContent=d.n;
+  b.addEventListener('click',()=>{drink=d;dr.querySelectorAll('.chip').forEach(x=>x.classList.remove('on'));b.classList.add('on');});dr.appendChild(b);});
+
+// bump
+function bump(strength,dir){
+  const now=performance.now();if(now-lastBump<500)return;lastBump=now;
+  dir=dir||(Math.random()<.5?-1:1);
+  vphi+=dir*strength*2.6;
+  for(let i=0;i<N;i++){v[i]+=(Math.sin(i*0.33+Math.random())*0.6+dir*(i/N-0.5)*1.6)*9*strength;}
+  const y=surfaceY(W/2);
+  for(let k=0;k<22;k++)drops.push({x:W*(0.25+Math.random()*0.5),y:y,vx:(Math.random()-.5)*160,vy:-(160+Math.random()*320)*strength,r:2+Math.random()*3});
+  rings.push({x:dir>0?W:0,y:y,r:10,a:.7});
+  cheersEl.classList.add('show');clearTimeout(ct);ct=setTimeout(()=>cheersEl.classList.remove('show'),800);
+  if(navigator.vibrate)try{navigator.vibrate(30);}catch(e){}
+}
+$('bump').addEventListener('click',()=>bump(1));
+addEventListener('keydown',e=>{if(e.code==='Space'){e.preventDefault();bump(1);}});
+
+// sensors (iPhoneは許可のタップが必要。HTTPSでのみ動作)
+function onOri(e){if(e.gamma==null)return;tilt=Math.max(-40,Math.min(40,e.gamma))*Math.PI/180;}
+function onMotion(e){
+  let m=0;const a=e.acceleration;
+  if(a&&a.x!=null)m=Math.hypot(a.x,a.y,a.z);
+  else{const g=e.accelerationIncludingGravity;if(g&&g.x!=null)m=Math.abs(Math.hypot(g.x,g.y,g.z)-9.8);}
+  if(m>16)bump(Math.min(m/28,1.5),(a&&a.x<0)?-1:1);
+}
+$('sens').addEventListener('click',async()=>{
+  try{
+    if(typeof DeviceMotionEvent!=='undefined'&&typeof DeviceMotionEvent.requestPermission==='function'){
+      const r=await DeviceMotionEvent.requestPermission();
+      if(r!=='granted'){say('センサーが許可されませんでした。ドラッグで傾けられます');return;}
+      if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function')await DeviceOrientationEvent.requestPermission();
+    }
+    addEventListener('deviceorientation',onOri);addEventListener('devicemotion',onMotion);
+    sensors=true;say('センサーON。スマホを傾けて、他のスマホとそっとコツン');
+  }catch(err){say('このブラウザではセンサーが使えません。ドラッグで傾けられます');}
+});
+
+// drag to tilt (fallback)
+cv.addEventListener('pointerdown',e=>{dragX=e.clientX;});
+addEventListener('pointermove',e=>{if(dragX!==null&&!sensors)tilt=Math.max(-1,Math.min(1,(e.clientX-dragX)/(W*0.35)))*0.6;});
+addEventListener('pointerup',()=>{dragX=null;if(!sensors)tilt=0;});
+addEventListener('pointercancel',()=>{dragX=null;if(!sensors)tilt=0;});
+
+function level(){return H*0.58;}
+function surfaceY(x){return level()+(x-W/2)*Math.tan(phi);}
+function step(dt){
+  const f=Math.min(dt*60,2);
+  // 傾きに遅れてついてくる水面（行き過ぎて揺り戻す）
+  vphi+=(-14*(phi-tilt)-3.2*vphi)*dt;phi+=vphi*dt;phi=Math.max(-0.75,Math.min(0.75,phi));
+  for(let i=0;i<N;i++){v[i]+=(-K*h[i]-D*v[i])*f;h[i]+=v[i]*f;}
+  const ld=new Float32Array(N),rd=new Float32Array(N);
+  for(let j=0;j<7;j++){
+    for(let i=0;i<N;i++){
+      if(i>0){ld[i]=S*(h[i]-h[i-1]);v[i-1]+=ld[i];}
+      if(i<N-1){rd[i]=S*(h[i]-h[i+1]);v[i+1]+=rd[i];}
+    }
+    for(let i=0;i<N;i++){if(i>0)h[i-1]+=ld[i];if(i<N-1)h[i+1]+=rd[i];}
+  }
+  for(let i=0;i<N;i++){if(h[i]>90)h[i]=90;if(h[i]<-90)h[i]=-90;}
+  if(drink.bub)for(const b of bubbles){b.y-=b.s*dt;b.p+=dt*3;if(b.y<surfaceY(b.x)+h[Math.max(0,Math.min(N-1,Math.round(b.x/W*(N-1))))]+4){b.y=H-10-Math.random()*H*0.15;b.x=Math.random()*W;}}
+  for(let i=drops.length-1;i>=0;i--){const d=drops[i];d.vy+=1500*dt;d.x+=d.vx*dt;d.y+=d.vy*dt;if(d.vy>0&&d.y>surfaceY(d.x)){drops.splice(i,1);}}
+  for(let i=rings.length-1;i>=0;i--){const r=rings[i];r.r+=260*dt;r.a-=1.4*dt;if(r.a<=0)rings.splice(i,1);}
+}
+function path(){
+  ctx.beginPath();
+  for(let i=0;i<N;i++){const x=i*W/(N-1),y=surfaceY(x)+h[i];if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);}
+}
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  ctx.save();
+  ctx.beginPath();ctx.roundRect(6,6,W-12,H-12,[30,30,52,52]);ctx.clip();
+  const g=ctx.createLinearGradient(0,level()-120,0,H);g.addColorStop(0,drink.c);g.addColorStop(1,drink.d);
+  path();ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.closePath();ctx.fillStyle=g;ctx.fill();
+  if(drink.bub){ctx.fillStyle='rgba(255,255,255,.35)';for(const b of bubbles){ctx.beginPath();ctx.arc(b.x+Math.sin(b.p)*4,b.y,b.r,0,7);ctx.fill();}}
+  path();ctx.lineJoin='round';ctx.strokeStyle='rgba(255,255,255,.85)';ctx.lineWidth=Math.max(3,drink.foam);ctx.stroke();
+  ctx.fillStyle=drink.c;for(const d of drops){ctx.beginPath();ctx.arc(d.x,d.y,d.r,0,7);ctx.fill();}
+  for(const r of rings){ctx.strokeStyle='rgba(255,255,255,'+r.a.toFixed(2)+')';ctx.lineWidth=3;ctx.beginPath();ctx.arc(r.x,r.y,r.r,0,7);ctx.stroke();}
+  const sh=ctx.createLinearGradient(0,0,W*0.22,0);sh.addColorStop(0,'rgba(255,255,255,.35)');sh.addColorStop(1,'rgba(255,255,255,0)');
+  ctx.fillStyle=sh;ctx.fillRect(6,6,W*0.22,H-12);
+  ctx.restore();
+}
+let last=performance.now();
+function tick(now){const dt=Math.min((now-last)/1000,0.033);last=now;step(dt);draw();requestAnimationFrame(tick);}
+addEventListener('resize',resize);
+resize();requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
